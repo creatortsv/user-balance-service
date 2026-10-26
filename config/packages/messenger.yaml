@@ -1,0 +1,58 @@
+framework:
+    messenger:
+        default_bus: command.bus
+        buses:
+            command.bus:
+                middleware:
+                    - App\Middleware\RetryPolicyMiddleware
+                    - validation
+                    - App\Middleware\InboxMiddleware
+            event.bus: ~
+
+        failure_transport: failed
+
+        serializer:
+            default_serializer: messenger.transport.symfony_serializer
+            symfony_serializer:
+                format: json
+
+        transports:
+            commands:
+                dsn: '%env(KAFKA_DSN)%'
+                options:
+                    topic: balance.commands
+                    group_id: '%env(KAFKA_GROUP_ID)%'
+                retry_strategy:
+                    max_retries: 0
+                    delay: 1000
+                    multiplier: 3
+                    max_delay: 30000
+                    jitter: 0
+            inbox:
+                dsn: 'inbox://'
+                retry_strategy:
+                    max_retries: 3
+                    delay: 1000
+                    multiplier: 3
+                    max_delay: 30000
+                    jitter: 0
+            events:
+                dsn: '%env(KAFKA_DSN)%'
+                serializer: App\Serializer\EventSerializer
+                options:
+                    topic: balance.events
+            outbox:
+                dsn: 'outbox://'
+                retry_strategy:
+                    max_delay: 30000
+            failed:
+                dsn: 'doctrine://default?queue_name=failed&auto_setup=0'
+                serializer: messenger.transport.native_php_serializer
+
+when@test:
+    framework:
+        messenger:
+            transports:
+                commands: 'in-memory://'
+                events: 'in-memory://'
+                failed: 'in-memory://'

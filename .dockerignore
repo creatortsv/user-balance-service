@@ -1,0 +1,12 @@
+.git
+.idea
+.vscode
+vendor
+var
+.env.local
+.env.local.php
+.env.*.local
+.phpunit.cache
+.phpcs-cache
+compose*.yaml
+Makefile

@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  qa:
+    name: Code style, static analysis and tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the dev image
+        run: docker compose build php
+
+      - name: Install dependencies
+        run: docker/bin/composer install
+
+      - name: Code style
+        run: make cs
+
+      - name: Static analysis
+        run: make stan
+
+      - name: Tests
+        run: make test

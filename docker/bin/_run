@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+set -eo pipefail
+
+export PATH="$PATH:/usr/local/bin:/opt/homebrew/bin:$HOME/.orbstack/bin"
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+export HOST_PROJECT_DIR="$ROOT"
+
+workdir="$(pwd)"
+case "$workdir" in "$ROOT" | "$ROOT"/*) ;; *) workdir="$ROOT" ;; esac
+
+flags=(-w "$workdir")
+if ! { [ -t 0 ] && [ -t 1 ]; }; then flags+=(-T); fi
+for var in XDEBUG_TRIGGER XDEBUG_SESSION XDEBUG_MODE XDEBUG_CONFIG; do
+  if [ -n "${!var:-}" ]; then flags+=(-e "$var=${!var}"); fi
+done
+
+cd "$ROOT"
+exec docker compose --progress quiet run --rm --no-deps "${flags[@]}" php "$@"

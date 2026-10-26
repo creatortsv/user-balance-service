@@ -1,0 +1,104 @@
+x-app: &app
+  image: user-balance-service:dev
+  build: .
+  working_dir: ${HOST_PROJECT_DIR:-/app}
+  volumes:
+    - .:${HOST_PROJECT_DIR:-/app}
+    - composer-cache:/var/cache/composer
+  extra_hosts: ["host.docker.internal:host-gateway"]
+
+x-consumer: &consumer
+  <<: *app
+  restart: unless-stopped
+  depends_on:
+    migrations: { condition: service_completed_successfully }
+    topics: { condition: service_completed_successfully }
+
+services:
+  worker:
+    <<: *consumer
+    command: ["php", "bin/console", "messenger:consume", "commands", "--bus=command.bus", "--time-limit=3600", "--memory-limit=128M", "-vv"]
+    deploy: { replicas: 2 }
+
+  processor:
+    <<: *consumer
+    command: ["php", "bin/console", "messenger:consume", "inbox", "--bus=command.bus", "--sleep=0.1", "--time-limit=3600", "--memory-limit=128M", "-vv"]
+    deploy: { replicas: 2 }
+
+  relay:
+    <<: *consumer
+    command: ["php", "bin/console", "messenger:consume", "outbox", "--bus=event.bus", "--sleep=0.1", "--time-limit=3600", "--memory-limit=128M", "-vv"]
+
+  migrations:
+    <<: *app
+    command: ["sh", "-c", "php bin/console doctrine:migrations:migrate --no-interaction --allow-no-migration && php bin/console messenger:setup-transports"]
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  topics:
+    image: apache/kafka:4.4.0
+    entrypoint: ["sh", "-ec"]
+    command:
+      - for topic in balance.commands balance.events; do
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists
+        --topic $$topic --partitions 6 --replication-factor 1; done
+    depends_on:
+      kafka: { condition: service_healthy }
+
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB: balance
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+    volumes: ["postgres-data:/var/lib/postgresql"]
+    restart: unless-stopped
+    healthcheck: { test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "app", "-d", "balance"], interval: 5s, retries: 10 }
+
+  kafka:
+    image: apache/kafka:4.4.0
+    hostname: kafka
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+    volumes: ["kafka-data:/var/lib/kafka/data"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 > /dev/null"]
+      interval: 5s
+      retries: 20
+
+  kafka-ui:
+    image: kafbat/kafka-ui:v1.5.0
+    ports: ["127.0.0.1:${KAFKA_UI_PORT:-8080}:8080"]
+    environment:
+      KAFKA_CLUSTERS_0_NAME: balance-service
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+    depends_on:
+      kafka: { condition: service_healthy }
+
+  php:
+    <<: *app
+    profiles: [tools]
+    volumes:
+      - .:${HOST_PROJECT_DIR:-/app}
+      - composer-cache:/var/cache/composer
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      TESTCONTAINERS_HOST_OVERRIDE: host.docker.internal
+
+volumes:
+  postgres-data:
+  kafka-data:
+  composer-cache:
